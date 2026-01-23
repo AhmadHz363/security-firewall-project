@@ -1,0 +1,40 @@
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /usr/share/filebeat/logs/pf.log
+    # Parse JSON logs
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.overwrite_keys: true
+    # Don't use multiline for JSON logs
+    close_inactive: 5m
+    scan_frequency: 1s
+
+# Configure output to Elasticsearch
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  # No username/password since xpack.security.enabled=false
+  index: "firewall-%{+yyyy.MM.dd}"
+  # Optional: bulk settings for better performance
+  bulk_max_size: 50
+  worker: 1
+
+# Disable ILM since we're using daily indices
+setup.ilm.enabled: false
+
+# Configure index template
+setup.template.name: "firewall"
+setup.template.pattern: "firewall-*"
+setup.template.settings:
+  index.number_of_shards: 1
+  index.number_of_replicas: 0
+
+# Logging configuration
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /usr/share/filebeat/logs
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644

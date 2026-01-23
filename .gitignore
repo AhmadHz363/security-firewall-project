@@ -1,0 +1,23 @@
+# Logs
+logs/
+*.log
+*.ndjson
+
+# Filebeat data & registry
+filebeat/data/
+filebeat/logs/
+registry/
+
+# Elasticsearch data
+esdata/
+data/
+
+# Docker
+*.pid
+*.sock
+
+# macOS
+.DS_Store
+
+# Environment files
+.env
