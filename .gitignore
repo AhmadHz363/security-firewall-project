@@ -6,11 +6,10 @@ logs/
 # Filebeat data & registry
 filebeat/data/
 filebeat/logs/
-registry/
+**/registry/
 
 # Elasticsearch data
 esdata/
-data/
 
 # Docker
 *.pid

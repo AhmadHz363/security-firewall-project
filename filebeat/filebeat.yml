@@ -1,0 +1,276 @@
+################################################################################
+# Filebeat Configuration - Network Security Monitoring
+# Professional configuration for firewall and Zeek IDS logs
+################################################################################
+
+filebeat.inputs:
+  #-----------------------------------------------------------------------------
+  # Firewall Logs (iptables JSON format)
+  #-----------------------------------------------------------------------------
+  - type: log
+    enabled: true
+    paths:
+      - /logs/firewall.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.overwrite_keys: true
+    fields:
+      log_source: firewall
+      security_layer: network_filter
+      component: iptables
+    fields_under_root: true
+    scan_frequency: 1s
+    close_inactive: 5m
+    ignore_older: 24h
+    
+  #-----------------------------------------------------------------------------
+  # Zeek Connection Logs
+  #-----------------------------------------------------------------------------
+  - type: log
+    enabled: true
+    paths:
+      - /logs/zeek/conn.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.overwrite_keys: true
+    fields:
+      log_source: zeek
+      log_type: connection
+      security_layer: network_analysis
+      component: zeek_ids
+    fields_under_root: true
+    scan_frequency: 2s
+    close_inactive: 5m
+    ignore_older: 24h
+    
+  #-----------------------------------------------------------------------------
+  # Zeek HTTP Logs
+  #-----------------------------------------------------------------------------
+  - type: log
+    enabled: true
+    paths:
+      - /logs/zeek/http.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.overwrite_keys: true
+    fields:
+      log_source: zeek
+      log_type: http
+      security_layer: application_analysis
+      component: zeek_ids
+    fields_under_root: true
+    scan_frequency: 2s
+    close_inactive: 5m
+    ignore_older: 24h
+    
+  #-----------------------------------------------------------------------------
+  # Zeek DNS Logs
+  #-----------------------------------------------------------------------------
+  - type: log
+    enabled: true
+    paths:
+      - /logs/zeek/dns.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.overwrite_keys: true
+    fields:
+      log_source: zeek
+      log_type: dns
+      security_layer: network_analysis
+      component: zeek_ids
+    fields_under_root: true
+    scan_frequency: 2s
+    close_inactive: 5m
+    ignore_older: 24h
+    
+  #-----------------------------------------------------------------------------
+  # Zeek Notice/Alert Logs (Security Events)
+  #-----------------------------------------------------------------------------
+  - type: log
+    enabled: true
+    paths:
+      - /logs/zeek/notice.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.overwrite_keys: true
+    fields:
+      log_source: zeek
+      log_type: notice
+      security_layer: detection
+      component: zeek_ids
+      severity: high
+    fields_under_root: true
+    scan_frequency: 1s
+    close_inactive: 5m
+    ignore_older: 24h
+    
+  #-----------------------------------------------------------------------------
+  # Zeek Files Logs
+  #-----------------------------------------------------------------------------
+  - type: log
+    enabled: true
+    paths:
+      - /logs/zeek/files.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.overwrite_keys: true
+    fields:
+      log_source: zeek
+      log_type: files
+      security_layer: file_analysis
+      component: zeek_ids
+    fields_under_root: true
+    scan_frequency: 2s
+    close_inactive: 5m
+    ignore_older: 24h
+
+################################################################################
+# Elasticsearch Output Configuration
+################################################################################
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  
+  # Dynamic index routing based on log type
+  indices:
+    - index: "firewall-%{+yyyy.MM.dd}"
+      when.equals:
+        log_source: "firewall"
+    
+    - index: "zeek-conn-%{+yyyy.MM.dd}"
+      when.and:
+        - equals:
+            log_source: "zeek"
+        - equals:
+            log_type: "connection"
+    
+    - index: "zeek-http-%{+yyyy.MM.dd}"
+      when.and:
+        - equals:
+            log_source: "zeek"
+        - equals:
+            log_type: "http"
+    
+    - index: "zeek-dns-%{+yyyy.MM.dd}"
+      when.and:
+        - equals:
+            log_source: "zeek"
+        - equals:
+            log_type: "dns"
+    
+    - index: "zeek-notice-%{+yyyy.MM.dd}"
+      when.and:
+        - equals:
+            log_source: "zeek"
+        - equals:
+            log_type: "notice"
+    
+    - index: "zeek-files-%{+yyyy.MM.dd}"
+      when.and:
+        - equals:
+            log_source: "zeek"
+        - equals:
+            log_type: "files"
+  
+  # Bulk indexing settings for performance
+  bulk_max_size: 50
+  worker: 2
+  compression_level: 3
+  timeout: 90
+
+################################################################################
+# Index Lifecycle Management
+################################################################################
+setup.ilm.enabled: false
+
+################################################################################
+# Index Template Configuration  
+################################################################################
+setup.template.enabled: true
+setup.template.name: "security-logs"
+setup.template.pattern: "security-*"
+setup.template.settings:
+  index.number_of_shards: 1
+  index.number_of_replicas: 0
+  index.refresh_interval: "5s"
+
+################################################################################
+# Processors - Data Enrichment
+################################################################################
+processors:
+  # Add host metadata
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+      netinfo.enabled: true
+      cache.ttl: 5m
+  
+  # Add Docker container metadata
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+      match_source: true
+      match_source_index: 4
+  
+  # Convert Zeek Unix timestamp to ISO8601
+  - timestamp:
+      field: ts
+      target_field: "@timestamp"
+      layouts:
+        - UNIX
+      ignore_failure: true
+  
+  # Add ECS version
+  - add_fields:
+      target: ''
+      fields:
+        ecs.version: '8.0.0'
+  
+  # Rename Zeek ID fields for consistency (if they exist)
+  - rename:
+      fields:
+        - from: "id.orig_h"
+          to: "source.ip"
+        - from: "id.orig_p"
+          to: "source.port"
+        - from: "id.resp_h"
+          to: "destination.ip"
+        - from: "id.resp_p"
+          to: "destination.port"
+      ignore_missing: true
+      fail_on_error: false
+  
+  # Drop empty events
+  - drop_event:
+      when:
+        equals:
+          message: ""
+
+################################################################################
+# Logging Configuration
+################################################################################
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+  rotateeverybytes: 10485760
+
+################################################################################
+# Performance Tuning
+################################################################################
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 1s
+
+################################################################################
+# Monitoring
+################################################################################
+monitoring.enabled: false
+
+################################################################################
+# HTTP Endpoint for Health Checks
+################################################################################
+http.enabled: true
+http.host: "0.0.0.0"
+http.port: 5066
