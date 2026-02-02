@@ -1,17 +1,21 @@
-FROM nginx:alpine
+FROM nginx:1.25-bookworm
 
 # Install required packages for firewall and logging
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     iptables \
-    iptables-legacy \
-    bash \
-    coreutils \
-    procps \
     iproute2 \
-    curl
+    kmod \
+    curl \
+    procps \
+    conntrack \
+    ulogd2 \
+    ulogd2-json \
+    rsyslog \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create directories
-RUN mkdir -p /logs /scripts
+RUN mkdir -p /logs /scripts /var/log/ulogd
 
 # Copy scripts
 COPY scripts/container_firewall.sh /scripts/container_firewall.sh

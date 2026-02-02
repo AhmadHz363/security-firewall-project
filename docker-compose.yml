@@ -45,7 +45,7 @@ services:
       - security_net
     restart: unless-stopped
       
-  # Filebeat - Log
+  # Filebeat - Log shipper
   filebeat:
     image: docker.elastic.co/beats/filebeat:8.15.0
     container_name: filebeat
@@ -63,37 +63,46 @@ services:
       - security_net
     restart: unless-stopped
       
-  # Zeek IDS - shares network namespace with attacker to see all traffic
+  # Zeek IDS - Monitor eth0 to see external traffic
   zeek:
     image: zeek/zeek:latest
     container_name: zeek
-    network_mode: "service:attacker"
+    network_mode: "service:target_web"  # Share target_web's network stack
     depends_on:
-      - attacker
+      - target_web
     cap_add:
       - NET_ADMIN
       - NET_RAW
     volumes:
       - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
       - ./logs/zeek:/logs/zeek
-    command: >
-      bash -c "
-        echo '[Zeek] Starting Network Security Monitor...' &&
-        mkdir -p /logs/zeek &&
-        cd /logs/zeek &&
+    command:
+      - /bin/bash
+      - -c
+      - |
+        echo '[Zeek] Starting Zeek Network Monitor'
+        mkdir -p /logs/zeek
+        cd /logs/zeek
+        echo '[Zeek] Monitoring interface: eth0 (external network traffic)'
+        
+        # Set interface to promiscuous mode
+        ip link set eth0 promisc on 2>/dev/null || echo "Could not set promiscuous mode"
+        
+        # Start Zeek on eth0
         zeek -C -i eth0 /usr/local/zeek/share/zeek/site/local.zeek 2>&1 | tee zeek-console.log
-      "
     restart: unless-stopped
 
-  # Target Web Server - has built-in firewall
+  # Target Web Server - UNCHANGED (Firewall protected)
   target_web:
     build:
       context: ./target_web
       dockerfile: Dockerfile
     container_name: target_web
+    privileged: true
     cap_add:
       - NET_ADMIN
       - NET_RAW
+      - SYS_MODULE
     ports:
       - "8080:80"
     networks:
@@ -102,6 +111,7 @@ services:
     volumes:
       - ./target/html:/usr/share/nginx/html:ro
       - ./logs:/logs
+      - /lib/modules:/lib/modules:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost"]
