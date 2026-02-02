@@ -1,0 +1,147 @@
+services:
+  # Elasticsearch - Central log storage
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - security_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q 'yellow\\|green'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      
+  # Kibana - Visualization interface
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_NAME=kibana
+      - XPACK_SECURITY_ENABLED=false
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - security_net
+    restart: unless-stopped
+      
+  # Filebeat - Log shipper
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.15.0
+    container_name: filebeat
+    user: root
+    volumes:
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./logs:/logs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: filebeat -e -strict.perms=false
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - security_net
+    restart: unless-stopped
+      
+  # Zeek IDS - Monitor eth0 to see external traffic
+  zeek:
+    image: zeek/zeek:latest
+    container_name: zeek
+    network_mode: "service:target_web"  # Share target_web's network stack
+    depends_on:
+      - target_web
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek:ro
+      - ./logs/zeek:/logs/zeek
+    command:
+      - /bin/bash
+      - -c
+      - |
+        echo '[Zeek] Starting Zeek Network Monitor'
+        mkdir -p /logs/zeek
+        cd /logs/zeek
+        echo '[Zeek] Monitoring interface: eth0 (external network traffic)'
+        
+        # Set interface to promiscuous mode
+        ip link set eth0 promisc on 2>/dev/null || echo "Could not set promiscuous mode"
+        
+        # Start Zeek on eth0
+        zeek -C -i eth0 /usr/local/zeek/share/zeek/site/local.zeek 2>&1 | tee zeek-console.log
+    restart: unless-stopped
+
+  # Target Web Server - UNCHANGED (Firewall protected)
+  target_web:
+    build:
+      context: ./target_web
+      dockerfile: Dockerfile
+    container_name: target_web
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+    ports:
+      - "8080:80"
+    networks:
+      security_net:
+        ipv4_address: 172.25.0.3
+    volumes:
+      - ./target/html:/usr/share/nginx/html:ro
+      - ./logs:/logs
+      - /lib/modules:/lib/modules:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Attacker Container - for running attack scenarios
+  attacker:
+    image: kalilinux/kali-rolling
+    container_name: attacker
+    networks:
+      security_net:
+        ipv4_address: 172.25.0.4
+    command: tail -f /dev/null
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+volumes:
+  esdata:
+    driver: local
+
+networks:
+  security_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/24
+          gateway: 172.25.0.1
